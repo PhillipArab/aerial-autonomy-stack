@@ -8,9 +8,9 @@
 
 > For the motivation behind AAS and how it compares to similar projects, read [`RATIONALE.md`](/supplementary/RATIONALE.md)
 
-https://github.com/user-attachments/assets/0c60afc0-22bf-4ea0-b367-8691ecf6a3e7
+https://github.com/user-attachments/assets/c194ada6-2996-4bfa-99e9-32b45e29281d
 
-## Feature Highlights
+## Features
 
 - Support for multiple **quadrotors and VTOLs** based on either **PX4 or ArduPilot**
 - **ROS2**-based autopilot interfaces (*via* XRCE-DDS and MAVROS)
@@ -39,12 +39,14 @@ https://github.com/user-attachments/assets/0c60afc0-22bf-4ea0-b367-8691ecf6a3e7
 > [!IMPORTANT]
 > This stack is developed and tested using a [Ubuntu 22.04](https://ubuntu.com/about/release-cycle) host (penultimate LTS, ESM 4/2032) with [**`nvidia-driver-575`**](https://developer.nvidia.com/datacenter-driver-archive) and Docker Engine v28 (latest stable releases as of 7/2025) on an i9-13 with RTX3500 and an i7-11 with RTX3060—**note that an NVIDIA GPU *is* required**
 > 
-> **To setup the requirements: (i) Ubuntu 22, Git LFS, (ii) NVIDIA driver, (iii) Docker Engine, (iv) NVIDIA Container Toolkit, and (v) NVIDIA NGC API Key, read [`PREINSTALL.md`](/supplementary/PREINSTALL.md) (for Windows, read [`WSL_EXPERIMENTAL.md`](/supplementary/WSL_EXPERIMENTAL.md))**
+> **To setup the requirements: (i) Ubuntu 22, Git LFS, (ii) NVIDIA driver, (iii) Docker Engine, (iv) NVIDIA Container Toolkit, and (v) NVIDIA NGC API Key, read [`PREINSTALL_UBUNTU.md`](/supplementary/PREINSTALL_UBUNTU.md)**
+>
+> Windows support *via* WSL is work-in-progress, read [`PREINSTALL_WSL.md`](/supplementary/PREINSTALL_WSL.md)
 
 ```sh
 # Clone this repo
 mkdir -p ~/git
-git clone git@github.com:JacopoPan/aerial-autonomy-stack.git ~/git/aerial-autonomy-stack
+git clone https://github.com/JacopoPan/aerial-autonomy-stack.git ~/git/aerial-autonomy-stack
 cd ~/git/aerial-autonomy-stack
 ```
 
@@ -71,7 +73,7 @@ cd ~/git/aerial-autonomy-stack/scripts
 AUTOPILOT=px4 NUM_QUADS=1 NUM_VTOLS=1 WORLD=swiss_town ./sim_run.sh # Check the script for more options
 ```
 
-> On a low-mid range laptop—i7-11 with 16GB RAM and RTX3060—AAS simulates 3 PX4 quads with camera and LiDAR in the default world at 99% of the wall-clock (ArduPilot faster physics updates and more complex worlds can have higher computational demands)
+> On a low-mid range laptop—i7-11 with 16GB RAM and RTX3060—AAS simulates 3 PX4 quads with camera and LiDAR at 99% of the wall-clock (note that ArduPilot faster physics updates and more complex worlds have higher computational demands)
 >
 > Once "Ready to Fly", one can takeoff and control from QGroundControl's ["Fly View"](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/fly_view/fly_view.html)
 
@@ -241,15 +243,14 @@ docker exec -it aircraft-container tmux attach
 
 <!-- 
 
+
+
 ## TODOs
 
 - https://developer.nvidia.com/embedded/learn/tutorials/first-picture-csi-usb-camera
 - https://github.com/Livox-SDK/livox_ros_driver2
-- Replace _create_ardupilot_world.sh and _create_ardupilot_models.sh with ruby/erb 
-- Simplify ArdupilotInterface
 - Add state estimation package/node
 - Add bounding-box-based Offboard
-- Create smaller docker images to use GitHub Actions
 - For PX4 quad max tilt maneuver, zero the anti-windup gain: const float arw_gain = 2.f / _gain_vel_p(0);
 - ????
 - Profit
@@ -264,7 +265,6 @@ docker exec -it aircraft-container tmux attach
 - In ArdupilotInterface's action callbacks, std::shared_lock<std::shared_mutex> lock(node_data_mutex_); could be used on the reads of lat_, lon_, alt_
 - In yolo_inference_node.py, cannot open GPU accelerated (nvh264dec) GStreamer pipeline with cv2.VideoCapture, might need to recompile OpenCV to have both CUDA and GStreamer support (or use python3-gi gir1.2-gst-plugins-base-1.0 gir1.2-gstreamer-1.0 and circumvent OpenCV)
 - QGC does not save roll and pitch in the telemetry bar for PX4 VTOLs (MAV_TYPE 22)
-- OpenGL-CUDA Interop is not yet supported on WSL2. Gazebo rendering on WSL builds are currently limited at RTF ~5-10%. 
 
 
 
