@@ -4,10 +4,14 @@
 **Test 2**
 
 # Git Commands
+
 git status
+
 git switch (or git checkout)
-git branch (--show)
-git add path/to/file (-u for edit only)
+
+
+git branch (--show)  
+git add path/to/file (-u for edit only)  
 git commit -m "Fixed title message"
 git push
 git fetch
