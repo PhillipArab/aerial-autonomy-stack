@@ -5,13 +5,19 @@ set -e
 
 if [ "$#" -ne 3 ]; then
   echo "Usage: $0 <num_quads> <num_vtols> <full_path_to_empty_world>"
-  echo "Example: ./_create_ardupilot_world.sh 2 1 /simulation_resources/simulation_worlds/impalpable_greyness.sdf"
+  echo "Example: ./_create_ardupilot_world.sh 2 1 /aas/simulation_resources/simulation_worlds/impalpable_greyness.sdf"
   exit 1
 fi
 
 NUM_QUADS=$1
 NUM_VTOLS=$2
 BASE_WORLD_WITH_PATH=$3
+
+# Resolve the path relative to the script's directory if it's not absolute
+if [[ "$BASE_WORLD_WITH_PATH" != /* ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  BASE_WORLD_WITH_PATH="${SCRIPT_DIR}/${BASE_WORLD_WITH_PATH}"
+fi
 
 # Create a copy of the template to work on
 BASE_WORLD_DIR=$(dirname "$BASE_WORLD_WITH_PATH")

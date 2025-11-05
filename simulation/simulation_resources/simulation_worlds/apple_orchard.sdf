@@ -194,7 +194,14 @@
         <real_time_factor>1</real_time_factor>
         <iterations>1</iterations>
       </plugin>
-      <plugin name="Entity tree" filename="EntityTree"/>
+      <plugin name="Entity tree" filename="EntityTree">
+        <gz-gui>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+          <property key="width" type="double">0</property>
+          <property key="height" type="double">0</property>
+        </gz-gui>
+      </plugin>
     </gui>
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
@@ -454,10 +461,10 @@
       <pose degrees="true">-5 -3 5 0 0 0</pose>
     </include>
 
-    <include>
+    <!-- <include>
       <uri>model://skibidi</uri>
       <pose degrees="true">-50 250 3 0 0 80</pose>
-    </include>
+    </include> -->
 
   </world>
 </sdf>

@@ -10,7 +10,7 @@ from pymavlink import mavutil
 from ground_system_msgs.msg import SwarmObs, DroneObs
 
 class OracleNode(Node):
-    def __init__(self, num_drones, base_port, publish_rate):
+    def __init__(self, num_drones, ip, base_port, publish_rate):
         super().__init__('oracle')
         
         self.drone_obs = {}  # Thread-safe storage for latest data
@@ -20,7 +20,7 @@ class OracleNode(Node):
         for i in range(num_drones):
             drone_id = i + 1
             port = base_port + i
-            connection_string = f"udp:127.0.0.1:{port}"
+            connection_string = f"udp:{ip}:{port}"
             thread = threading.Thread(target=self.mavlink_listener, args=(drone_id, connection_string))
             thread.daemon = True
             thread.start()
@@ -91,6 +91,7 @@ class OracleNode(Node):
 def main(args=None):
     parser = argparse.ArgumentParser(description='Oracle Node')
     parser.add_argument('--num-drones', type=int, required=True, help='Number of drones to listen for.')
+    parser.add_argument('--ip', type=str, default='0.0.0.0', help='IP address to listen on.')
     parser.add_argument('--base-port', type=int, default=14540, help='Base UDP port to start listening from.')
     parser.add_argument('--rate', type=float, default=10.0, help='Publishing rate in Hz.')
     
@@ -100,6 +101,7 @@ def main(args=None):
     
     node = OracleNode(
         num_drones=cli_args.num_drones,
+        ip=cli_args.ip,
         base_port=cli_args.base_port,
         publish_rate=cli_args.rate
     )

@@ -4,14 +4,23 @@
 set -e
 
 # Set up the simulation
-NUM_QUADS="${NUM_QUADS:-1}" # Number of quadcopters (default = 1)
-NUM_VTOLS="${NUM_VTOLS:-0}" # Number of VTOLs (default = 0)
 AUTOPILOT="${AUTOPILOT:-px4}" # Options: px4 (default), ardupilot
-WORLD="${WORLD:-impalpable_greyness}" # Options: impalpable_greyness (default), apple_orchard, shibuya_crossing, swiss_town
 HEADLESS="${HEADLESS:-false}" # Options: true, false (default)
 CAMERA="${CAMERA:-true}" # Options: true (default), false
 LIDAR="${LIDAR:-true}" # Options: true (default), false 
-MODE="${MODE:-}" # Options: empty (default), dev, ...
+#
+SIM_SUBNET="${SIM_SUBNET:-10.42}" # Simulation subnet (default = 10.42)
+AIR_SUBNET="${AIR_SUBNET:-10.22}" # Inter-vehicle subnet (default = 10.22)
+SIM_ID="${SIM_ID:-100}" # Last byte of the simulation container IP (default = 100)
+GROUND_ID="${GROUND_ID:-101}" # Last byte of the simulation container IP (default = 101)
+#
+NUM_QUADS="${NUM_QUADS:-1}" # Number of quadcopters (default = 1)
+NUM_VTOLS="${NUM_VTOLS:-0}" # Number of VTOLs (default = 0)
+WORLD="${WORLD:-impalpable_greyness}" # Options: impalpable_greyness (default), apple_orchard, shibuya_crossing, swiss_town
+#
+DEV="${DEV:false}" # Options: true, false (default)
+HITL="${HITL:-false}" # Options: true, false (default)
+GND_CONTAINER="${GND_CONTAINER:-true}" # Options: true (default), false
 
 # Detect the environment (Ubuntu/GNOME, WSL, etc.)
 if command -v gnome-terminal >/dev/null 2>&1 && [ -n "$XDG_CURRENT_DESKTOP" ]; then
@@ -24,25 +33,197 @@ else
 fi
 echo "Desktop environment: $DESK_ENV"
 
+# In dev mode, resources and workspaces are mounted from the host
+if [[ "$DEV" == "true" ]]; then
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  #
+  DEV_SIM_OPTS="--entrypoint /bin/bash"
+  DEV_SIM_OPTS+=" -v ${SCRIPT_DIR}/../simulation/simulation_resources/:/aas/simulation_resources:cached"
+  #
+  DEV_GND_OPTS="--entrypoint /bin/bash"
+  DEV_GND_OPTS+=" -v ${SCRIPT_DIR}/../ground/ground_resources/:/aas/ground_resources:cached"
+  DEV_GND_OPTS+=" -v ${SCRIPT_DIR}/../ground/ground_ws/src:/aas/ground_ws/src:cached"
+  #
+  DEV_AIR_OPTS="--entrypoint /bin/bash"
+  DEV_AIR_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_resources/:/aas/aircraft_resources:cached"
+  DEV_AIR_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_ws/src:/aas/aircraft_ws/src:cached"
+  DEV_AIR_OPTS+=" -v ${SCRIPT_DIR}/../ground/ground_ws/src/ground_system_msgs:/aas/aircraft_ws/src/ground_system_msgs:cached"
+fi
+
+# Create docker networks for SITL
+if [[ "$HITL" == "false" ]]; then
+  docker network inspect aas-sim-network >/dev/null 2>&1 || docker network create --subnet=${SIM_SUBNET}.0.0/16 aas-sim-network
+  docker network inspect aas-air-network >/dev/null 2>&1 || docker network create --subnet=${AIR_SUBNET}.0.0/16 aas-air-network
+fi
+
+# Grant access to the X server
+if command -v xhost >/dev/null 2>&1; then 
+  xhost +local:docker
+fi
+
+# WSL-specific options
+WSL_OPTS="--env WAYLAND_DISPLAY=$WAYLAND_DISPLAY --env PULSE_SERVER=$PULSE_SERVER --volume /usr/lib/wsl:/usr/lib/wsl \
+--env LD_LIBRARY_PATH=/usr/lib/wsl/lib --env LIBGL_ALWAYS_SOFTWARE=0 --env __GLX_VENDOR_LIBRARY_NAME=nvidia"
+
+# Get display dimensions
+resolution=$(xrandr 2>/dev/null | grep " connected primary" | grep -oE '[0-9]+x[0-9]+' | head -1)
+if [[ ! "$resolution" =~ ^[0-9]+x[0-9]+$ ]]; then
+  resolution=$(xrandr 2>/dev/null | grep " connected" | grep -oE '[0-9]+x[0-9]+' | head -1) # Fallback
+fi
+if [[ "$resolution" =~ ^[0-9]+x[0-9]+$ ]]; then
+  SCREEN_WIDTH=$(echo "$resolution" | cut -d'x' -f1)
+  SCREEN_HEIGHT=$(echo "$resolution" | cut -d'x' -f2)
+  echo "Detected display: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
+else
+  SCREEN_WIDTH=1920
+  SCREEN_HEIGHT=1080
+  echo "Fallback resolution to ${SCREEN_WIDTH}x${SCREEN_HEIGHT} default"
+fi
+
+# Function to calculate terminal position based on ID
+calculate_terminal_position() {
+  local xterm_id=$1
+  SCREEN_SCALE=$((SCREEN_HEIGHT * 100 / 1080)) # Full HD = 100%
+  X_POS=$(( (50 + xterm_id * 50) * SCREEN_SCALE / 100 ))
+  Y_POS=$(( (xterm_id * 125) * SCREEN_SCALE / 100 ))
+}
+
+# Setup terminal dimensions and enable Shift+Ctrl+c, Shift+Ctrl+v copy-paste in Xterm
+TERM_COLS=80
+TERM_ROWS=32
+FONT_SIZE=10
+XTERM_CONFIG_ARGS=(
+  -xrm 'XTerm*selectToClipboard: true'
+  -xrm 'XTerm*VT100.Translations: #override \
+    Ctrl Shift <Key>C: copy-selection(CLIPBOARD) \n\
+    Ctrl Shift <Key>V: insert-selection(CLIPBOARD)'
+)
+
+# Launch the simulation container
+DOCKER_CMD="docker run -it --rm \
+  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
+  --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
+  --env AUTOPILOT=$AUTOPILOT --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
+  --env NUM_QUADS=$NUM_QUADS --env NUM_VTOLS=$NUM_VTOLS --env WORLD=$WORLD \
+  --env SIMULATED_TIME=true \
+  --env SIM_SUBNET=$SIM_SUBNET --env GROUND_ID=$GROUND_ID \
+  --env GND_CONTAINER=$GND_CONTAINER \
+  --env ROS_DOMAIN_ID=$SIM_ID \
+  --privileged \
+  --name simulation-container"
+# Configure network for HITL or SITL
+if [[ "$HITL" == "true" ]]; then
+  DOCKER_CMD="$DOCKER_CMD --net=host"
+else
+  DOCKER_CMD="$DOCKER_CMD --net=aas-sim-network --ip=${SIM_SUBNET}.90.${SIM_ID}"
+fi
+# Add WSL-specific options and complete the command
+if [[ "$DESK_ENV" == "wsl" ]]; then
+  DOCKER_CMD="$DOCKER_CMD $WSL_OPTS"
+fi
+DOCKER_CMD="$DOCKER_CMD ${DEV_SIM_OPTS} simulation-image"
+calculate_terminal_position 0
+xterm "${XTERM_CONFIG_ARGS[@]}" -title "Simulation" -fa Monospace -fs $FONT_SIZE -bg black -fg white \
+  -geometry "${TERM_COLS}x${TERM_ROWS}+${X_POS}+${Y_POS}" -hold -e bash -c "$DOCKER_CMD" &
+
+if [[ "$HITL" == "false" ]]; then
+
+  if [[ "$GND_CONTAINER" == "true" ]]; then
+    sleep 1.0 # Limit resource usage
+    # Launch the ground container
+    DOCKER_CMD="docker run -it --rm \
+      --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
+      --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
+      --env HEADLESS=$HEADLESS \
+      --env NUM_QUADS=$NUM_QUADS --env NUM_VTOLS=$NUM_VTOLS \
+      --env SIMULATED_TIME=true \
+      --env ROS_DOMAIN_ID=$GROUND_ID \
+      --net=aas-sim-network --ip=${SIM_SUBNET}.90.${GROUND_ID} \
+      --privileged \
+      --name ground-container"
+    # Add WSL-specific options and complete the command
+    if [[ "$DESK_ENV" == "wsl" ]]; then
+      DOCKER_CMD="$DOCKER_CMD $WSL_OPTS"
+    fi
+    DOCKER_CMD="$DOCKER_CMD ${DEV_GND_OPTS} ground-image"
+    calculate_terminal_position 1
+    xterm "${XTERM_CONFIG_ARGS[@]}" -title "Ground" -fa Monospace -fs $FONT_SIZE -bg black -fg white \
+      -geometry "${TERM_COLS}x${TERM_ROWS}+${X_POS}+${Y_POS}" -hold -e bash -c "$DOCKER_CMD" &
+  fi
+
+  # Initialize a counter for the drone IDs
+  DRONE_ID=1 # 1, 2, .., N drones
+
+  # Function to launch the aircraft containers
+  launch_aircraft_containers() {
+    local drone_type=$1
+    local num_drones=$2
+    
+    for i in $(seq 1 $num_drones); do
+      sleep 1.5 # Limit resource usage
+      DOCKER_CMD="docker run -it --rm \
+        --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
+        --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
+        --env AUTOPILOT=$AUTOPILOT --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
+        --env DRONE_TYPE=$drone_type --env DRONE_ID=$DRONE_ID \
+        --env SIMULATED_TIME=true \
+        --env SIM_SUBNET=$SIM_SUBNET --env AIR_SUBNET=$AIR_SUBNET --env SIM_ID=$SIM_ID --env GROUND_ID=$GROUND_ID \
+        --env GND_CONTAINER=$GND_CONTAINER \
+        --env ROS_DOMAIN_ID=$DRONE_ID \
+        --net=aas-sim-network --ip=${SIM_SUBNET}.90.$DRONE_ID \
+        --privileged \
+        --name aircraft-container_$DRONE_ID"
+      # Add WSL-specific options and complete the command
+      if [[ "$DESK_ENV" == "wsl" ]]; then
+        DOCKER_CMD="$DOCKER_CMD $WSL_OPTS"
+      fi
+      DOCKER_CMD="$DOCKER_CMD ${DEV_AIR_OPTS} aircraft-image"
+      calculate_terminal_position $(($DRONE_ID + 1))
+      xterm "${XTERM_CONFIG_ARGS[@]}" -title "${drone_type^^} $DRONE_ID" -fa Monospace -fs $FONT_SIZE -bg black -fg white \
+        -geometry "${TERM_COLS}x${TERM_ROWS}+${X_POS}+${Y_POS}" -hold -e bash -c "$DOCKER_CMD" &
+      DRONE_ID=$((DRONE_ID + 1))
+    done
+  }
+  # Launch the Quad containers
+  launch_aircraft_containers "quad" $NUM_QUADS
+  # Launch the VTOL containers
+  launch_aircraft_containers "vtol" $NUM_VTOLS
+
+  if [[ "$GND_CONTAINER" == "true" ]]; then
+    # Finally, connect ground and aircraft containers to the air network
+    sleep 2
+    docker network connect --ip=${AIR_SUBNET}.90.$GROUND_ID aas-air-network ground-container
+    for i in $(seq 1 $((NUM_QUADS + NUM_VTOLS))); do
+      docker network connect --ip=${AIR_SUBNET}.90.$i aas-air-network aircraft-container_$i
+    done
+  fi
+fi
+
+echo "Fly, my pretties, fly!"
+echo "Press any key to stop all containers and close the terminals..."
+read -n 1 -s # Wait for user input
+
 # Cleanup function
 cleanup() {
-  DOCKER_PIDS=$(pgrep -f "docker run.*simulation-image|docker run.*aircraft-image" 2>/dev/null || true)
-  SIMULATION_CONTAINERS=$(docker ps -a -q --filter name=simulation-container 2>/dev/null || true)
-  AIRCRAFT_CONTAINERS=$(docker ps -a -q --filter name=aircraft-container 2>/dev/null || true)
+  DOCKER_PIDS=$(pgrep -f "docker run.*(simulation|ground|aircraft)-image" 2>/dev/null || true)
+  CONTAINER_NAMES=("simulation-container" "ground-container" "aircraft-container")
+  CONTAINERS_TO_STOP=""
+  for name in "${CONTAINER_NAMES[@]}"; do
+      CONTAINERS_TO_STOP+=$(docker ps -a -q --filter name="${name}" 2>/dev/null || true)
+      CONTAINERS_TO_STOP+=" "
+  done
   echo "Stopping Docker containers (this will take a few seconds)..."
-  if [ -n "$SIMULATION_CONTAINERS" ]; then
-    docker stop $SIMULATION_CONTAINERS
+  if [ -n "$CONTAINERS_TO_STOP" ]; then
+      echo "$CONTAINERS_TO_STOP" | xargs docker stop
   fi
-  if [ -n "$AIRCRAFT_CONTAINERS" ]; then
-    docker stop $AIRCRAFT_CONTAINERS
-  fi
-  docker network rm aas-network 2>/dev/null && echo "Removed aas-network" || echo "Network aas-network not found or already removed"
+  docker network rm aas-sim-network 2>/dev/null && echo "Removed aas-sim-network" || echo "Network aas-sim-network not found or already removed"
+  docker network rm aas-air-network 2>/dev/null && echo "Removed aas-air-network" || echo "Network aas-air-network not found or already removed"
   if [ -n "$DOCKER_PIDS" ]; then
     for dpid in $DOCKER_PIDS; do
       PARENT_PID=$(ps -o ppid= -p $dpid 2>/dev/null | tr -d ' ') # Determine process pids with a parent pid
       if [ -n "$PARENT_PID" ]; then
         echo "Killing terminal process $dpid"
-        kill -9 $dpid
+        kill $dpid
       fi
     done
   fi
@@ -50,124 +231,3 @@ cleanup() {
 }
 # Set trap to cleanup on script interruption (Ctrl+C, etc.)
 trap cleanup EXIT INT TERM
-
-# Initialize an empty variable for the flags
-MODE_SIM_OPTS=""
-MODE_AIR_OPTS=""
-case "$MODE" in
-  dev)
-    # In dev mode, resources and workspaces are mounted from the host
-    SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    MODE_SIM_OPTS="--entrypoint /bin/bash"
-    MODE_SIM_OPTS+=" -v ${SCRIPT_DIR}/../simulation/simulation_resources/:/simulation_resources:cached"
-    MODE_SIM_OPTS+=" -v ${SCRIPT_DIR}/../simulation/simulation_ws/src:/ros2_ws/src:cached"
-    MODE_AIR_OPTS="--entrypoint /bin/bash"
-    MODE_AIR_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_resources/:/aircraft_resources:cached"
-    MODE_AIR_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_ws/src:/ros2_ws/src:cached"
-    MODE_AIR_OPTS+=" -v ${SCRIPT_DIR}/../simulation/simulation_ws/src/ground_system_msgs:/ros2_ws/src/ground_system_msgs:cached"
-    ;;
-  *)
-    MODE_SIM_OPTS=""
-    MODE_AIR_OPTS=""
-    ;;
-esac
-
-# Grant access to the X server
-if command -v xhost >/dev/null 2>&1; then 
-  xhost +local:docker
-fi
-
-# Create network
-NETWORK_NAME="aas-network"
-docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create --subnet=42.42.0.0/16 "$NETWORK_NAME"
-
-# Helper to place the terminals on-screen
-CHAR_WIDTH=20 # Adjust to your terminal size
-CHAR_HEIGHT=40 # Adjust to your terminal size
-SCREEN_GEOMETRY=$(xdpyinfo | grep dimensions | sed -r 's/^[^0-9]*([0-9]+x[0-9]+).*$/\1/')
-SCREEN_WIDTH=$(echo $SCREEN_GEOMETRY | cut -d'x' -f1)
-SCREEN_HEIGHT=$(echo $SCREEN_GEOMETRY | cut -d'x' -f2)
-get_quadrant_geometry() {
-  local index=$1
-  local width_chars=$(( (SCREEN_WIDTH / 2) / CHAR_WIDTH ))
-  local height_chars=$(( (SCREEN_HEIGHT / 2) / CHAR_HEIGHT ))
-  local x_pos=$(( (index == 1 || index == 2) * (SCREEN_WIDTH / 2) ))
-  local y_pos=$(( (index == 2 || index == 3) * (SCREEN_HEIGHT / 2) ))
-  echo "${width_chars}x${height_chars}+${x_pos}+${y_pos}"
-}
-
-# Launch the simulation container
-DOCKER_CMD="echo 'Launching Simulation Container...'; \
-  docker run -it --rm \
-  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
-  --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
-  --env ROS_DOMAIN_ID=99 --env AUTOPILOT=$AUTOPILOT --env DRONE_TYPE=$DRONE_TYPE \
-  --env NUM_QUADS=$NUM_QUADS --env NUM_VTOLS=$NUM_VTOLS \
-  --env WORLD=$WORLD --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
-  --env SIMULATED_TIME=true \
-  --net=aas-network --ip=42.42.1.99 \
-  --privileged \
-  --name simulation-container \
-  ${MODE_SIM_OPTS} \
-  simulation-image"
-#
-if [[ "$DESK_ENV" == "wsl" ]]; then
-  xterm -hold -e "$DOCKER_CMD --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" &
-elif [[ "$DESK_ENV" == "gnome" ]]; then
-  gnome-terminal --geometry=$(get_quadrant_geometry 0) -- bash -c "$DOCKER_CMD; exec bash"
-fi
-
-# Initialize a counter for the drone IDs
-DRONE_ID=0
-
-# Launch the quad containers
-for i in $(seq 1 $NUM_QUADS); do
-  DRONE_ID=$((DRONE_ID + 1))
-  sleep 1.5 # Limit resource usage
-  DOCKER_CMD="echo 'Launching Quadcopter Container $DRONE_ID...'; \
-    docker run -it --rm \
-      --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
-      --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
-      --env ROS_DOMAIN_ID=$DRONE_ID --env AUTOPILOT=$AUTOPILOT \
-      --env DRONE_TYPE=quad \
-      --env DRONE_ID=$DRONE_ID --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
-      --env SIMULATED_TIME=true \
-      --net=aas-network --ip=42.42.1.$DRONE_ID \
-      --privileged \
-      --name aircraft-container_$DRONE_ID \
-      ${MODE_AIR_OPTS} \
-      aircraft-image"
-  if [[ "$DESK_ENV" == "wsl" ]]; then
-    xterm -hold -e "$DOCKER_CMD --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" &
-  elif [[ "$DESK_ENV" == "gnome" ]]; then
-    gnome-terminal --geometry=$(get_quadrant_geometry $(( DRONE_ID % 4 ))) -- bash -c "$DOCKER_CMD; exec bash"
-  fi
-done
-
-# Launch the vtol containers
-for i in $(seq 1 $NUM_VTOLS); do
-  DRONE_ID=$((DRONE_ID + 1))
-  sleep 1.5 # Limit resource usage
-  DOCKER_CMD="echo 'Launching VTOL Container $DRONE_ID...'; \
-    docker run -it --rm \
-      --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
-      --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
-      --env ROS_DOMAIN_ID=$DRONE_ID --env AUTOPILOT=$AUTOPILOT \
-      --env DRONE_TYPE=vtol \
-      --env DRONE_ID=$DRONE_ID --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
-      --env SIMULATED_TIME=true \
-      --net=aas-network --ip=42.42.1.$DRONE_ID \
-      --privileged \
-      --name aircraft-container_$DRONE_ID \
-      ${MODE_AIR_OPTS} \
-      aircraft-image"
-  if [[ "$DESK_ENV" == "wsl" ]]; then
-    xterm -hold -e "$DOCKER_CMD --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" &
-  elif [[ "$DESK_ENV" == "gnome" ]]; then
-    gnome-terminal --geometry=$(get_quadrant_geometry $(( DRONE_ID % 4 ))) -- bash -c "$DOCKER_CMD; exec bash"
-  fi
-done
-
-echo "Fly, my pretties, fly!"
-echo "Press any key to stop all containers and close the terminals..."
-read -n 1 -s # Wait for user input

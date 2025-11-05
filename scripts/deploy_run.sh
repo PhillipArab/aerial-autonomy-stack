@@ -4,53 +4,89 @@
 set -e
 
 # Set up the aircraft
-DRONE_TYPE="${DRONE_TYPE:-quad}" # Options: quad (default), vtol
 AUTOPILOT="${AUTOPILOT:-px4}" # Options: px4 (default), ardupilot
-DRONE_ID="${DRONE_ID:-1}" # Id of aircraft (default = 1)
 HEADLESS="${HEADLESS:-true}" # Options: true (default), false 
 CAMERA="${CAMERA:-true}" # Options: true (default), false
 LIDAR="${LIDAR:-true}" # Options: true (default), false
-MODE="${MODE:-}" # Options: empty (default), dev, ...
+#
+SIM_SUBNET="${SIM_SUBNET:-10.42}" # Simulation subnet (default = 10.42)
+AIR_SUBNET="${AIR_SUBNET:-10.22}" # Inter-vehicle subnet (default = 10.22)
+SIM_ID="${SIM_ID:-100}" # Last byte of the simulation container IP (default = 100)
+GROUND_ID="${GROUND_ID:-101}" # Last byte of the simulation container IP (default = 101)
+#
+DRONE_TYPE="${DRONE_TYPE:-quad}" # Options: quad (default), vtol
+DRONE_ID="${DRONE_ID:-1}" # Id of aircraft (default = 1)
+#
+DEV="${DEV:false}" # Options: true, false (default)
+HITL="${HITL:-false}" # Options: true, false (default)
+GND_CONTAINER="${GND_CONTAINER:-true}" # Options: true (default), false
 
-# Initialize an empty variable for the flags
-MODE_OPTS=""
-case "$MODE" in
-  dev)
-    MODE_OPTS="--entrypoint /bin/bash"
-    ;;
-  *)
-    MODE_OPTS=""
-    ;;
-esac
-
-if [ "$HEADLESS" = "false" ]; then
-    # Grant access to the X server
-    xhost +local:docker # Remove this when building TensorRT cache for the first time
-fi
-
-# Launch the aircraft container in detached mode
-docker run -d -t \
-    --runtime nvidia \
+GROUND="${GROUND:-false}" # Options: true, false (default)
+if [[ "$GROUND" == "true" ]]; then
+  # This is a bit hacky, but allows to use the deploy_run.sh script for the ground container
+  docker run -it --rm \
     --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
     --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
-    --env ROS_DOMAIN_ID=$DRONE_ID --env AUTOPILOT=$AUTOPILOT --env DRONE_TYPE=$DRONE_TYPE \
-    --env DRONE_ID=$DRONE_ID --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
-    --env SIMULATED_TIME=false --env HEADLESS=$HEADLESS\
+    --env HEADLESS=$HEADLESS \
+    --env NUM_QUADS=$NUM_QUADS --env NUM_VTOLS=$NUM_VTOLS \
+    --env SIMULATED_TIME=$HITL \
+    --env ROS_DOMAIN_ID=$GROUND_ID \
     --net=host \
     --privileged \
-    --name aircraft-container \
-    -v ~/tensorrt_cache/:/tensorrt_cache \
-    ${MODE_OPTS} \
-    aircraft-image
+    --name ground-container \
+    ground-image
+  exit 0
+fi
 
-echo "Now attach with: docker exec -it aircraft-container tmux attach"
-echo "If MODE=dev, attach with: docker exec -it aircraft-container bash"
+# In dev mode, resources and workspaces are mounted from the host
+if [[ "$DEV" == "true" ]]; then
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  DEV_OPTS="--entrypoint /bin/bash"
+  DEV_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_resources/:/aas/aircraft_resources:cached"
+  DEV_OPTS+=" -v ${SCRIPT_DIR}/../aircraft/aircraft_ws/src:/aas/aircraft_ws/src:cached"
+  DEV_OPTS+=" -v ${SCRIPT_DIR}/../ground/ground_ws/src/ground_system_msgs:/aas/aircraft_ws/src/ground_system_msgs:cached"
+fi
+
+if [ "$HEADLESS" = "false" ]; then
+  # Grant access to the X server
+  xhost +local:docker # Avoid this when building the TensorRT cache for the first time
+fi
+
+if [ "$HITL" = "true" ]; then
+  DOCKER_RUN_FLAGS="-it --rm" # Interactive mode with auto-remove
+else
+  DOCKER_RUN_FLAGS="-d -t" # Detached mode
+  if [[ "$DEV" == "true" ]]; then
+    echo -e "\nWith DEV=true, attach directly to the bash shell:\n"
+    echo -e "\t docker exec -it aircraft-container_$DRONE_ID bash\n"
+  else
+    echo -e "\nAttach to the Tmux session in the running 'aircraft-container':\n"
+    echo -e "\t docker exec -it aircraft-container_$DRONE_ID tmux attach\n"
+  fi
+  echo -e "To stop all containers and remove stopped containers:\n"
+  echo -e '\t docker stop $(docker ps -q) && docker container prune\n'
+fi
+
+# Launch the aircraft container
+docker run $DOCKER_RUN_FLAGS \
+  --runtime nvidia \
+  --volume /tmp/.X11-unix:/tmp/.X11-unix:rw --device /dev/dri --gpus all \
+  --volume /tmp/argus_socket:/tmp/argus_socket --volume ~/tensorrt_cache/:/tensorrt_cache --device=/dev/ttyTHS1:/dev/ttyTHS1 \
+  --env DISPLAY=$DISPLAY --env QT_X11_NO_MITSHM=1 --env NVIDIA_DRIVER_CAPABILITIES=all --env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR --env GST_DEBUG=3 \
+  --env AUTOPILOT=$AUTOPILOT --env HEADLESS=$HEADLESS --env CAMERA=$CAMERA --env LIDAR=$LIDAR \
+  --env HITL=$HITL --env SIMULATED_TIME=$HITL \
+  --env DRONE_TYPE=$DRONE_TYPE --env DRONE_ID=$DRONE_ID \
+  --env SIM_SUBNET=$SIM_SUBNET --env AIR_SUBNET=$AIR_SUBNET --env SIM_ID=$SIM_ID --env GROUND_ID=$GROUND_ID \
+  --env GND_CONTAINER=$GND_CONTAINER \
+  --env ROS_DOMAIN_ID=$DRONE_ID \
+  --net=host \
+  --privileged \
+  --name aircraft-container_$DRONE_ID \
+  ${DEV_OPTS} \
+  aircraft-image
 
 # Check ONNX runtimes
-# MODE=dev HEADLESS=false ./deploy_run.sh
+# DEV=true HEADLESS=false ./deploy_run.sh
 # docker exec -it aircraft-container bash
 # python3 -c "import onnxruntime as ort; print(ort.__version__); print(ort.get_available_providers())"
-# tmuxinator start -p /aircraft.yml.erb
-
-# docker stop $(docker ps -q) # Stop all containers
-# docker container prune # Remove stopped containers
+# tmuxinator start -p /aas/aircraft.yml.erb

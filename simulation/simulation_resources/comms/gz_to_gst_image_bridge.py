@@ -29,31 +29,44 @@ def on_new_gz_frame(msg: Image):
     if retval != Gst.FlowReturn.OK:
         print("Error pushing buffer to GStreamer")
 
+def check_nvidia_encoder():
+    element = Gst.ElementFactory.make('nvh264enc', None)
+    if element is not None:
+        element.set_state(Gst.State.NULL)
+        return True
+    return False
+
 def main():
     global pipeline, appsrc, main_loop
 
     parser = argparse.ArgumentParser(description="Bridge a Gazebo camera topic to a GStreamer UDP stream.")
-    parser.add_argument('--gz_topic', default="/camera", help="Gazebo topic to subscribe to.")
-    parser.add_argument('--ip', default="42.42.1.1", help="Destination host for the GStreamer stream.")
-    parser.add_argument('--port', type=int, default=5600, help="Destination port for the GStreamer stream.")
+    parser.add_argument('--gz_topic', help="Gazebo Image topic to subscribe to.")
+    parser.add_argument('--ip', help="Destination host for the GStreamer stream.")
+    parser.add_argument('--port', type=int, help="Destination port for the GStreamer stream (see pipelines in yolo_inference_node.py).")
     args = parser.parse_args()
 
     Gst.init(None)
 
-    # pipeline_str = (
-    #     "appsrc name=py_source ! "
-    #     "videoconvert ! "
-    #     "x264enc speed-preset=ultrafast tune=zerolatency bitrate=500 ! " # Optimize CPU use
-    #     "rtph264pay ! "
-    #     f"udpsink host={args.ip} port={args.port}"
-    # )
-    pipeline_str = (
-        "appsrc name=py_source ! "
-        "videoconvert ! "
-        "nvh264enc preset=low-latency-hq ! " # Use the NVIDIA H.264 encoder
-        "rtph264pay ! "
-        f"udpsink host={args.ip} port={args.port}"
-    )
+    use_gpu = check_nvidia_encoder()
+    if use_gpu:
+        pipeline_str = (
+            "appsrc name=py_source ! "
+            "videoconvert ! "
+            "nvh264enc preset=low-latency-hq ! " # Use the NVIDIA H.264 encoder
+            "rtph264pay ! "
+            f"udpsink host={args.ip} port={args.port}"
+        )
+        print("Using GPU-accelerated GStreamer pipeline")
+    else:
+        pipeline_str = (
+            "appsrc name=py_source ! "
+            "videoconvert ! "
+            "x264enc speed-preset=ultrafast tune=zerolatency bitrate=500 ! " # Optimize CPU use
+            "rtph264pay ! "
+            f"udpsink host={args.ip} port={args.port}"
+        )
+        print("[WARNING] Falling back to CPU-based GStreamer pipeline")
+
     pipeline = Gst.parse_launch(pipeline_str)
     appsrc = pipeline.get_by_name('py_source')
 
