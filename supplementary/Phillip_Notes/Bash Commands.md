@@ -1,22 +1,26 @@
-Terminal Commands
+# Bash Commands  
 
-===Github=== (git)
-add <file>               # add one file
-add .                    # add all modified/new files in this directory
-add -u                   # add only modified/deleted files (not new)
-commit -m "Title"
+## Github (`git`)  
+```
+add <file>            # add one file  
+add .                 # add all modified/new files in this directory  
+add -u                # add only modified/deleted files (not new)  
+commit -m "Title"  
 push
 
 fetch
-pull
+pull  
 
 status
 branch --show
-switch
-remote -v		# show repo address/link
+switch  
+remote -v           # show repo address/link  
+```
 
-===Applications?=== (apt)
+## Applications? (`apt`)  
+```
 update
-upgrade
-install
-list --installed | grep "searchterm"
+upgrade  
+install  
+list --installed | grep "searchterm" 
+```
