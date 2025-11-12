@@ -4,8 +4,7 @@
 
 - For running a specific mission try:
 ```
-ros2 run mission mission --ros-args -r __ns:=/Drone$DRONE_ID -p use_sim_time:=true -p│
- conops:=cat          
+ros2 run mission mission --ros-args -r __ns:=/Drone$DRONE_ID -p use_sim_time:=true -p conops:=cat          
 ```
 
 Need to reference uav global position to compare to repo_req so i can determine if its within tolerance and then end this phase of mission.
