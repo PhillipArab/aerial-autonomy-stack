@@ -351,18 +351,18 @@ class MissionNode(Node):
                 self.get_logger().info("[Yalla] Mission complete")
                 self.conops_timer.cancel() # Stop this timer
         ################################################################################
-        elif self.conop == 'AtoB':
+        elif self.conops == 'AtoB':
             if self.mission_step == -1:
                 self.get_logger().info("[Phillip] Mission failed")
-                self.conops_timer.cancel() # Stop this timer
+                self.conops_timer.cancel() # Stop this timer, not sure if i need this
                 return
             elif self.mission_step == 0:
                 self.get_logger().info("[Phillip] Taking off")
                 self.mission_step = 1 # Dummy step to wait for takeoff completion
                 takeoff_goal = Takeoff.Goal()
                 takeoff_goal.takeoff_altitude = 20.0
-                #takeoff_goal.vtol_transition_heading = 300.0
-                #takeoff_goal.vtol_loiter_nord = 100.0
+                #takeoff_goal.vtol_transition_heading = 300.0       # I dont think i need these
+                #takeoff_goal.vtol_loiter_nord = 100.0              # but they were in yalla example
                 #takeoff_goal.vtol_loiter_east = 100.0
                 #takeoff_goal.vtol_loiter_alt = 120.0
                 self.send_goal(self._takeoff_client, takeoff_goal)
@@ -372,18 +372,22 @@ class MissionNode(Node):
                 repo_req = SetReposition.Request()
                 repo_req.east = 50.0
                 repo_req.north = 50.0
-                repo_req.altitude = 35.0
-                if os.getenv('AUTOPILOT', '') == 'px4':
-                    time.sleep(1.5) # Quick and dirty way to make sure the autopilot is fully out of Takeoff mode 
+                repo_req.altitude = 35.0 
                 self.call_service(self._reposition_client, repo_req)
-            elif self.mission_step == 3:
-                #
+            elif self.mission_step == 4:
                 pos_goal = [repo_req.east, repo_req.north, repo_req.altitude]
-                #distance = math.dist(self.something, pos_goal)
-                #
+                pos_current = [self.lat, self.lon, self.alt_msl]
+                e_dist = math.dist(pos_current, pos_goal)
+                if e_dist<5.0:
+                    self.get_logger().info("[Phil] Target Reached")
+                    self.mission_step = 5 # Dummy step to wait for landing completion
+                    land_goal = Land.Goal()
+                    land_goal.landing_altitude = 60.0
+                    land_goal.vtol_transition_heading = 60.0
+                    self.send_goal(self._land_client, land_goal)
             elif self.mission_step == 6:
                 self.get_logger().info("[Phil] Mission complete")
-                self.conops_timer.cancel() # Stop this timer
+                self.conops_timer.cancel() # Stop this timer, not sure if i need this
         ################################################################################
         elif self.conops == 'cat':
             if self.mission_step == -1:
